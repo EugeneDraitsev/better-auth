@@ -1,14 +1,14 @@
-import { getMigrations } from "better-auth/db";
+import { getMigrations } from "better-auth/db/migration";
 import type { SchemaGenerator } from "./types";
 
-export const generateMigrations: SchemaGenerator = async ({
+export const generateKyselySchema: SchemaGenerator = async ({
 	options,
 	file,
 }) => {
 	const { compileMigrations } = await getMigrations(options);
 	const migrations = await compileMigrations();
 	return {
-		code: migrations,
+		code: migrations.trim() === ";" ? "" : migrations,
 		fileName:
 			file ||
 			`./better-auth_migrations/${new Date()

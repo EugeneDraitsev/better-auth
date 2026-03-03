@@ -1,25 +1,91 @@
-interface CookieAttributes {
+function tryDecode(str: string): string {
+	try {
+		return decodeURIComponent(str);
+	} catch {
+		return str;
+	}
+}
+
+export interface CookieAttributes {
 	value: string;
-	"max-age"?: number;
-	expires?: Date;
-	domain?: string;
-	path?: string;
-	secure?: boolean;
-	httponly?: boolean;
-	samesite?: "strict" | "lax" | "none";
+	"max-age"?: number | undefined;
+	expires?: Date | undefined;
+	domain?: string | undefined;
+	path?: string | undefined;
+	secure?: boolean | undefined;
+	httponly?: boolean | undefined;
+	samesite?: ("strict" | "lax" | "none") | undefined;
 	[key: string]: any;
+}
+
+export const SECURE_COOKIE_PREFIX = "__Secure-";
+export const HOST_COOKIE_PREFIX = "__Host-";
+
+/**
+ * Remove __Secure- or __Host- prefix from cookie name.
+ */
+export function stripSecureCookiePrefix(cookieName: string): string {
+	if (cookieName.startsWith(SECURE_COOKIE_PREFIX)) {
+		return cookieName.slice(SECURE_COOKIE_PREFIX.length);
+	}
+	if (cookieName.startsWith(HOST_COOKIE_PREFIX)) {
+		return cookieName.slice(HOST_COOKIE_PREFIX.length);
+	}
+	return cookieName;
+}
+
+/**
+ * Split a comma-joined `Set-Cookie` header string into individual cookies.
+ */
+export function splitSetCookieHeader(setCookie: string): string[] {
+	if (!setCookie) return [];
+
+	const result: string[] = [];
+	let start = 0;
+	let i = 0;
+
+	while (i < setCookie.length) {
+		if (setCookie[i] === ",") {
+			let j = i + 1;
+			while (j < setCookie.length && setCookie[j] === " ") j++;
+			while (
+				j < setCookie.length &&
+				setCookie[j] !== "=" &&
+				setCookie[j] !== ";" &&
+				setCookie[j] !== ","
+			) {
+				j++;
+			}
+
+			if (j < setCookie.length && setCookie[j] === "=") {
+				const part = setCookie.slice(start, i).trim();
+				if (part) result.push(part);
+				start = i + 1;
+				while (start < setCookie.length && setCookie[start] === " ") start++;
+				i = start;
+				continue;
+			}
+		}
+
+		i++;
+	}
+
+	const last = setCookie.slice(start).trim();
+	if (last) result.push(last);
+
+	return result;
 }
 
 export function parseSetCookieHeader(
 	setCookie: string,
 ): Map<string, CookieAttributes> {
 	const cookies = new Map<string, CookieAttributes>();
-	const cookieArray = setCookie.split(", ");
+	const cookieArray = splitSetCookieHeader(setCookie);
 
 	cookieArray.forEach((cookieString) => {
 		const parts = cookieString.split(";").map((part) => part.trim());
 		const [nameValue, ...attributes] = parts;
-		const [name, ...valueParts] = nameValue.split("=");
+		const [name, ...valueParts] = (nameValue || "").split("=");
 
 		const value = valueParts.join("=");
 
@@ -27,13 +93,14 @@ export function parseSetCookieHeader(
 			return;
 		}
 
-		const attrObj: CookieAttributes = { value };
+		const decodedValue = value.includes("%") ? tryDecode(value) : value;
+		const attrObj: CookieAttributes = { value: decodedValue };
 
 		attributes.forEach((attribute) => {
-			const [attrName, ...attrValueParts] = attribute.split("=");
+			const [attrName, ...attrValueParts] = attribute!.split("=");
 			const attrValue = attrValueParts.join("=");
 
-			const normalizedAttrName = attrName.trim().toLowerCase();
+			const normalizedAttrName = attrName!.trim().toLowerCase();
 
 			switch (normalizedAttrName) {
 				case "max-age":
@@ -75,9 +142,7 @@ export function parseSetCookieHeader(
 }
 
 export function setCookieToHeader(headers: Headers) {
-	return (context: {
-		response: Response;
-	}) => {
+	return (context: { response: Response }) => {
 		const setCookieHeader = context.response.headers.get("set-cookie");
 		if (!setCookieHeader) {
 			return;
@@ -87,18 +152,15 @@ export function setCookieToHeader(headers: Headers) {
 
 		const existingCookiesHeader = headers.get("cookie") || "";
 		existingCookiesHeader.split(";").forEach((cookie) => {
-			const [name, ...rest] = cookie.trim().split("=");
+			const [name, ...rest] = cookie!.trim().split("=");
 			if (name && rest.length > 0) {
 				cookieMap.set(name, rest.join("="));
 			}
 		});
 
-		const setCookieHeaders = setCookieHeader.split(",");
-		setCookieHeaders.forEach((header) => {
-			const cookies = parseSetCookieHeader(header);
-			cookies.forEach((value, name) => {
-				cookieMap.set(name, value.value);
-			});
+		const cookies = parseSetCookieHeader(setCookieHeader);
+		cookies.forEach((value, name) => {
+			cookieMap.set(name, value.value);
 		});
 
 		const updatedCookies = Array.from(cookieMap.entries())

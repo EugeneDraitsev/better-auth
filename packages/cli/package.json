@@ -1,60 +1,93 @@
 {
-  "name": "@better-auth/cli",
-  "version": "1.2.8-beta.2",
+  "name": "auth",
+  "version": "1.5.2",
   "description": "The CLI for Better Auth",
-  "module": "dist/index.mjs",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://www.better-auth.com/docs/concepts/cli",
   "repository": {
     "type": "git",
-    "url": "https://github.com/better-auth/better-auth",
+    "url": "git+https://github.com/better-auth/better-auth.git",
     "directory": "packages/cli"
   },
-  "main": "./dist/index.mjs",
-  "scripts": {
-    "build": "unbuild",
-    "stub": "unbuild --stub",
-    "start": "node ./dist/index.mjs",
-    "test": "vitest"
-  },
+  "keywords": [
+    "auth",
+    "cli",
+    "typescript",
+    "better-auth"
+  ],
   "publishConfig": {
+    "access": "public",
     "executableFiles": [
       "./dist/index.mjs"
     ]
   },
-  "exports": "./dist/index.mjs",
-  "bin": "./dist/index.mjs",
-  "devDependencies": {
-    "@types/diff": "^7.0.1",
-    "@types/fs-extra": "^11.0.4",
-    "typescript": "catalog:",
-    "unbuild": "catalog:",
-    "vitest": "^1.6.0"
-  },
-  "dependencies": {
-    "@babel/preset-react": "^7.26.3",
-    "@babel/preset-typescript": "^7.26.0",
-    "@clack/prompts": "^0.10.0",
-    "@mrleebo/prisma-ast": "^0.12.0",
-    "@prisma/client": "^5.22.0",
-    "@types/better-sqlite3": "^7.6.12",
-    "@types/prompts": "^2.4.9",
-    "better-auth": "workspace:*",
-    "better-sqlite3": "^11.6.0",
-    "c12": "^2.0.1",
-    "chalk": "^5.3.0",
-    "commander": "^12.1.0",
-    "dotenv": "^16.4.7",
-    "drizzle-orm": "^0.33.0",
-    "fs-extra": "^11.3.0",
-    "get-tsconfig": "^4.8.1",
-    "prettier": "^3.4.2",
-    "prisma": "^5.22.0",
-    "prompts": "^2.4.2",
-    "semver": "^7.7.1",
-    "tinyexec": "^0.3.1",
-    "yocto-spinner": "^0.1.1",
-    "zod": "^3.23.8"
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsx ./src/index.ts",
+    "start": "node ./dist/index.mjs",
+    "lint:package": "publint run --strict",
+    "lint:types": "attw --profile esm-only --pack .",
+    "typecheck": "tsc --project tsconfig.json",
+    "test": "vitest",
+    "coverage": "vitest run --coverage --coverage.provider=istanbul"
   },
   "files": [
     "dist"
-  ]
+  ],
+  "exports": {
+    "./api": {
+      "types": "./dist/api.d.mts",
+      "default": "./dist/api.mjs"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "api": [
+        "./dist/api.d.mts"
+      ]
+    }
+  },
+  "bin": {
+    "better-auth": "./dist/index.mjs",
+    "auth": "./dist/index.mjs"
+  },
+  "dependencies": {
+    "@babel/core": "^7.29.0",
+    "@babel/preset-react": "^7.28.5",
+    "@babel/preset-typescript": "^7.28.5",
+    "@better-auth/core": "workspace:*",
+    "@better-auth/telemetry": "workspace:*",
+    "@better-auth/utils": "catalog:",
+    "@clack/prompts": "^0.11.0",
+    "@mrleebo/prisma-ast": "^0.13.1",
+    "@prisma/client": "^7.4.1",
+    "@types/pg": "^8.16.0",
+    "better-auth": "workspace:*",
+    "c12": "^3.3.3",
+    "chalk": "^5.6.2",
+    "commander": "^12.1.0",
+    "dotenv": "^17.3.1",
+    "drizzle-orm": "^0.41.0",
+    "open": "^10.2.0",
+    "pg": "^8.19.0",
+    "prettier": "^3.8.1",
+    "prompts": "^2.4.2",
+    "semver": "^7.7.4",
+    "yocto-spinner": "^0.2.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@better-auth/passkey": "workspace:*",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/prompts": "^2.4.9",
+    "@types/semver": "^7.7.1",
+    "better-sqlite3": "^12.6.2",
+    "jiti": "^2.6.1",
+    "memfs": "^4.56.10",
+    "tsdown": "catalog:",
+    "tsx": "^4.21.0",
+    "type-fest": "^5.4.4",
+    "typescript": "catalog:"
+  }
 }

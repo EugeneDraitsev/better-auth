@@ -7,8 +7,11 @@ export const defaultStatements = {
 		"set-role",
 		"ban",
 		"impersonate",
+		"impersonate-admins",
 		"delete",
 		"set-password",
+		"get",
+		"update",
 	],
 	session: ["list", "revoke", "delete"],
 } as const;
@@ -24,6 +27,8 @@ export const adminAc = defaultAc.newRole({
 		"impersonate",
 		"delete",
 		"set-password",
+		"get",
+		"update",
 	],
 	session: ["list", "revoke", "delete"],
 });

@@ -1,7 +1,7 @@
-import path from "path";
-import fs from "fs-extra";
+import fs from "node:fs";
+import path from "node:path";
 
-export function stripJsonComments(jsonString: string): string {
+function stripJsonComments(jsonString: string): string {
 	return jsonString
 		.replace(/\\"|"(?:\\"|[^"])*"|(\/\/.*|\/\*[\s\S]*?\*\/)/g, (m, g) =>
 			g ? "" : m,
@@ -9,12 +9,17 @@ export function stripJsonComments(jsonString: string): string {
 		.replace(/,(?=\s*[}\]])/g, "");
 }
 
-export function getTsconfigInfo(cwd?: string) {
-	const packageJsonPath = cwd
-		? path.join(cwd, "tsconfig.json")
-		: path.join("tsconfig.json");
+export function getTsconfigInfo(cwd?: string, flatPath?: string) {
+	let tsConfigPath: string;
+	if (flatPath) {
+		tsConfigPath = flatPath;
+	} else {
+		tsConfigPath = cwd
+			? path.join(cwd, "tsconfig.json")
+			: path.join("tsconfig.json");
+	}
 	try {
-		const text = fs.readFileSync(packageJsonPath, "utf-8");
+		const text = fs.readFileSync(tsConfigPath, "utf-8");
 		return JSON.parse(stripJsonComments(text));
 	} catch (error) {
 		throw error;

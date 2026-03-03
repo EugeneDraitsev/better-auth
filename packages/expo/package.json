@@ -1,25 +1,55 @@
 {
   "name": "@better-auth/expo",
-  "version": "1.2.8-beta.2",
-  "description": "",
-  "main": "dist/index.cjs",
-  "module": "dist/index.mjs",
-  "scripts": {
-    "test": "vitest",
-    "build": "unbuild --clean",
-    "dev": "unbuild --watch",
-    "stub": "unbuild --stub"
+  "version": "1.5.2",
+  "description": "Better Auth integration for Expo and React Native applications.",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://www.better-auth.com/docs/integrations/expo",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/better-auth/better-auth.git",
+    "directory": "packages/expo"
   },
+  "keywords": [
+    "auth",
+    "expo",
+    "react-native",
+    "typescript",
+    "better-auth"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "lint:package": "publint run --strict",
+    "lint:types": "attw --profile esm-only --pack .",
+    "typecheck": "tsc --project tsconfig.json",
+    "test": "vitest",
+    "coverage": "vitest run --coverage --coverage.provider=istanbul"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "dev-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
+      "default": "./dist/index.js"
     },
     "./client": {
+      "dev-source": "./src/client.ts",
       "types": "./dist/client.d.ts",
-      "import": "./dist/client.mjs",
-      "require": "./dist/client.cjs"
+      "default": "./dist/client.js"
+    },
+    "./plugins": {
+      "dev-source": "./src/plugins/index.ts",
+      "types": "./dist/plugins/index.d.ts",
+      "default": "./dist/plugins/index.js"
     }
   },
   "typesVersions": {
@@ -29,33 +59,48 @@
       ],
       "client": [
         "./dist/client.d.ts"
+      ],
+      "plugins": [
+        "./dist/plugins/index.d.ts"
       ]
     }
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "devDependencies": {
-    "@better-fetch/fetch": "catalog:",
-    "better-auth": "workspace:*",
-    "better-sqlite3": "^11.6.0",
-    "expo-constants": "~17.0.8",
-    "expo-crypto": "^13.0.2",
-    "expo-linking": "~7.0.5",
-    "expo-secure-store": "~14.0.1",
-    "expo-web-browser": "~14.0.2",
-    "unbuild": "^3.5.0",
-    "vitest": "^1.6.0"
-  },
-  "peerDependencies": {
-    "better-auth": "workspace:*"
   },
   "dependencies": {
     "@better-fetch/fetch": "catalog:",
     "better-call": "catalog:",
-    "zod": "^3.23.8"
+    "zod": "^4.3.6"
   },
-  "files": [
-    "dist"
-  ]
+  "devDependencies": {
+    "@better-auth/core": "workspace:*",
+    "@better-fetch/fetch": "catalog:",
+    "better-auth": "workspace:*",
+    "expo-constants": "~55.0.7",
+    "expo-linking": "~55.0.7",
+    "expo-network": "~55.0.8",
+    "expo-web-browser": "~55.0.9",
+    "react-native": "~0.84.1",
+    "tsdown": "catalog:"
+  },
+  "peerDependencies": {
+    "@better-auth/core": "workspace:*",
+    "better-auth": "workspace:*",
+    "expo-constants": ">=17.0.0",
+    "expo-linking": ">=7.0.0",
+    "expo-network": ">=8.0.7",
+    "expo-web-browser": ">=14.0.0"
+  },
+  "peerDependenciesMeta": {
+    "expo-constants": {
+      "optional": true
+    },
+    "expo-linking": {
+      "optional": true
+    },
+    "expo-network": {
+      "optional": true
+    },
+    "expo-web-browser": {
+      "optional": true
+    }
+  }
 }

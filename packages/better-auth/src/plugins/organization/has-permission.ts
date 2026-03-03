@@ -1,36 +1,79 @@
+import type { GenericEndpointContext } from "@better-auth/core";
+import * as z from "zod";
+import { APIError } from "../../api";
+import type { Role } from "../access";
 import { defaultRoles } from "./access";
-import type { OrganizationOptions } from "./organization";
+import type { HasPermissionBaseInput } from "./permission";
+import { cacheAllRoles, hasPermissionFn } from "./permission";
+import type { OrganizationRole } from "./schema";
 
-type PermissionExclusive =
-	| {
-			/**
-			 * @deprecated Use `permissions` instead
-			 */
-			permission: { [key: string]: string[] };
-			permissions?: never;
-	  }
-	| {
-			permissions: { [key: string]: string[] };
-			permission?: never;
-	  };
-
-export const hasPermission = (
+export const hasPermission = async (
 	input: {
-		role: string;
-		options: OrganizationOptions;
-	} & PermissionExclusive,
+		organizationId: string;
+		/**
+		 * If true, will use the in-memory cache of the roles.
+		 * Keep in mind to use this in a stateless mindset, the purpose of this is to avoid unnecessary database calls when running multiple
+		 * hasPermission calls in a row.
+		 *
+		 * @default false
+		 */
+		useMemoryCache?: boolean | undefined;
+	} & HasPermissionBaseInput,
+	ctx: GenericEndpointContext,
 ) => {
-	if (!input.permissions && !input.permission) {
-		return false;
-	}
-	const roles = input.role.split(",");
-	const acRoles = input.options.roles || defaultRoles;
-	for (const role of roles) {
-		const _role = acRoles[role as keyof typeof acRoles];
-		const result = _role?.authorize(input.permissions ?? input.permission);
-		if (result?.success) {
-			return true;
+	let acRoles: {
+		[x: string]: Role<any> | undefined;
+	} = { ...(input.options.roles || defaultRoles) };
+
+	if (
+		ctx &&
+		input.organizationId &&
+		input.options.dynamicAccessControl?.enabled &&
+		input.options.ac &&
+		!input.useMemoryCache
+	) {
+		// Load roles from database
+		const roles = await ctx.context.adapter.findMany<
+			OrganizationRole & { permission: string }
+		>({
+			model: "organizationRole",
+			where: [
+				{
+					field: "organizationId",
+					value: input.organizationId,
+				},
+			],
+		});
+
+		for (const { role, permission: permissionsString } of roles) {
+			const result = z
+				.record(z.string(), z.array(z.string()))
+				.safeParse(JSON.parse(permissionsString));
+
+			if (!result.success) {
+				ctx.context.logger.error(
+					"[hasPermission] Invalid permissions for role " + role,
+					{
+						permissions: JSON.parse(permissionsString),
+					},
+				);
+				throw new APIError("INTERNAL_SERVER_ERROR", {
+					message: "Invalid permissions for role " + role,
+				});
+			}
+
+			const merged: Record<string, string[]> = { ...acRoles[role]?.statements };
+			for (const [key, actions] of Object.entries(result.data)) {
+				merged[key] = [...new Set([...(merged[key] ?? []), ...actions])];
+			}
+			acRoles[role] = input.options.ac.newRole(merged);
 		}
 	}
-	return false;
+
+	if (input.useMemoryCache) {
+		acRoles = cacheAllRoles.get(input.organizationId) || acRoles;
+	}
+	cacheAllRoles.set(input.organizationId, acRoles);
+
+	return hasPermissionFn(input, acRoles);
 };

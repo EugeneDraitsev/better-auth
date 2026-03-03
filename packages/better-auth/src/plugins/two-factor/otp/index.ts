@@ -1,16 +1,19 @@
-import { APIError } from "better-call";
-import { z } from "zod";
-import { createAuthEndpoint } from "../../../api/call";
-import { verifyTwoFactor } from "../verify-two-factor";
-import type {
-	TwoFactorProvider,
-	TwoFactorTable,
-	UserWithTwoFactor,
-} from "../types";
-import { TWO_FACTOR_ERROR_CODES } from "../error-code";
-import { generateRandomString } from "../../../crypto";
+import type { Awaitable, GenericEndpointContext } from "@better-auth/core";
+import { createAuthEndpoint } from "@better-auth/core/api";
+import { APIError, BASE_ERROR_CODES } from "@better-auth/core/error";
+import * as z from "zod";
 import { setSessionCookie } from "../../../cookies";
-import { BASE_ERROR_CODES } from "../../../error/codes";
+import {
+	constantTimeEqual,
+	generateRandomString,
+	symmetricDecrypt,
+	symmetricEncrypt,
+} from "../../../crypto";
+import { parseUserOutput } from "../../../db/schema";
+import { TWO_FACTOR_ERROR_CODES } from "../error-code";
+import type { TwoFactorProvider, UserWithTwoFactor } from "../types";
+import { defaultKeyHasher } from "../utils";
+import { verifyTwoFactor } from "../verify-two-factor";
 
 export interface OTPOptions {
 	/**
@@ -19,13 +22,13 @@ export interface OTPOptions {
 	 *
 	 * @default "3 mins"
 	 */
-	period?: number;
+	period?: number | undefined;
 	/**
 	 * Number of digits for the OTP code
 	 *
 	 * @default 6
 	 */
-	digits?: number;
+	digits?: number | undefined;
 	/**
 	 * Send the otp to the user
 	 *
@@ -34,39 +37,130 @@ export interface OTPOptions {
 	 * @param request - The request object
 	 * @returns void | Promise<void>
 	 */
-	sendOTP?: (
-		/**
-		 * The user to send the otp to
-		 * @type UserWithTwoFactor
-		 * @default UserWithTwoFactors
-		 */
-		data: {
-			user: UserWithTwoFactor;
-			otp: string;
-		},
-		/**
-		 * The request object
-		 */
-		request?: Request,
-	) => Promise<void> | void;
+	sendOTP?:
+		| ((
+				/**
+				 * The user to send the otp to
+				 * @type UserWithTwoFactor
+				 * @default UserWithTwoFactors
+				 */
+				data: {
+					user: UserWithTwoFactor;
+					otp: string;
+				},
+				/**
+				 * The request object
+				 */
+				ctx?: GenericEndpointContext,
+		  ) => Awaitable<void>)
+		| undefined;
 	/**
 	 * The number of allowed attempts for the OTP
 	 *
 	 * @default 5
 	 */
-	allowedAttempts?: number;
+	allowedAttempts?: number | undefined;
+	storeOTP?:
+		| (
+				| "plain"
+				| "encrypted"
+				| "hashed"
+				| { hash: (token: string) => Promise<string> }
+				| {
+						encrypt: (token: string) => Promise<string>;
+						decrypt: (token: string) => Promise<string>;
+				  }
+		  )
+		| undefined;
 }
+
+const verifyOTPBodySchema = z.object({
+	code: z.string().meta({
+		description: 'The otp code to verify. Eg: "012345"',
+	}),
+	/**
+	 * if true, the device will be trusted
+	 * for 30 days. It'll be refreshed on
+	 * every sign in request within this time.
+	 */
+	trustDevice: z.boolean().optional().meta({
+		description:
+			"If true, the device will be trusted for 30 days. It'll be refreshed on every sign in request within this time. Eg: true",
+	}),
+});
+
+const send2FaOTPBodySchema = z
+	.object({
+		/**
+		 * if true, the device will be trusted
+		 * for 30 days. It'll be refreshed on
+		 * every sign in request within this time.
+		 */
+		trustDevice: z.boolean().optional().meta({
+			description:
+				"If true, the device will be trusted for 30 days. It'll be refreshed on every sign in request within this time. Eg: true",
+		}),
+	})
+	.optional();
 
 /**
  * The otp adapter is created from the totp adapter.
  */
-export const otp2fa = (options?: OTPOptions) => {
+export const otp2fa = (options?: OTPOptions | undefined) => {
 	const opts = {
+		storeOTP: "plain",
+		digits: 6,
 		...options,
-		digits: options?.digits || 6,
 		period: (options?.period || 3) * 60 * 1000,
 	};
-	const twoFactorTable = "twoFactor";
+
+	async function storeOTP(ctx: GenericEndpointContext, otp: string) {
+		if (opts.storeOTP === "hashed") {
+			return await defaultKeyHasher(otp);
+		}
+		if (typeof opts.storeOTP === "object" && "hash" in opts.storeOTP) {
+			return await opts.storeOTP.hash(otp);
+		}
+		if (typeof opts.storeOTP === "object" && "encrypt" in opts.storeOTP) {
+			return await opts.storeOTP.encrypt(otp);
+		}
+		if (opts.storeOTP === "encrypted") {
+			return await symmetricEncrypt({
+				key: ctx.context.secretConfig,
+				data: otp,
+			});
+		}
+		return otp;
+	}
+
+	async function decryptOrHashForComparison(
+		ctx: GenericEndpointContext,
+		storedOtp: string,
+		userInput: string,
+	): Promise<[string, string]> {
+		if (opts.storeOTP === "hashed") {
+			// For hashed storage: hash the user input and compare with stored hash
+			return [storedOtp, await defaultKeyHasher(userInput)];
+		}
+		if (opts.storeOTP === "encrypted") {
+			// For encrypted storage: decrypt stored value and compare with plain input
+			const decrypted = await symmetricDecrypt({
+				key: ctx.context.secretConfig,
+				data: storedOtp,
+			});
+			return [decrypted, userInput];
+		}
+		if (typeof opts.storeOTP === "object" && "encrypt" in opts.storeOTP) {
+			const decrypted = await opts.storeOTP.decrypt(storedOtp);
+			return [decrypted, userInput];
+		}
+		if (typeof opts.storeOTP === "object" && "hash" in opts.storeOTP) {
+			// For custom hash: hash the user input and compare with stored hash
+			return [storedOtp, await opts.storeOTP.hash(userInput)];
+		}
+		// Plain storage: compare directly
+		return [storedOtp, userInput];
+	}
 
 	/**
 	 * Generate OTP and send it to the user.
@@ -75,16 +169,7 @@ export const otp2fa = (options?: OTPOptions) => {
 		"/two-factor/send-otp",
 		{
 			method: "POST",
-			body: z
-				.object({
-					/**
-					 * if true, the device will be trusted
-					 * for 30 days. It'll be refreshed on
-					 * every sign in request within this time.
-					 */
-					trustDevice: z.boolean().optional(),
-				})
-				.optional(),
+			body: send2FaOTPBodySchema,
 			metadata: {
 				openapi: {
 					summary: "Send two factor OTP",
@@ -114,35 +199,30 @@ export const otp2fa = (options?: OTPOptions) => {
 				ctx.context.logger.error(
 					"send otp isn't configured. Please configure the send otp function on otp options.",
 				);
-				throw new APIError("BAD_REQUEST", {
+				throw APIError.from("BAD_REQUEST", {
 					message: "otp isn't configured",
+					code: "OTP_NOT_CONFIGURED",
 				});
 			}
 			const { session, key } = await verifyTwoFactor(ctx);
-			const twoFactor = await ctx.context.adapter.findOne<TwoFactorTable>({
-				model: twoFactorTable,
-				where: [
-					{
-						field: "userId",
-						value: session.user.id,
-					},
-				],
-			});
-			if (!twoFactor) {
-				throw new APIError("BAD_REQUEST", {
-					message: TWO_FACTOR_ERROR_CODES.OTP_NOT_ENABLED,
-				});
-			}
 			const code = generateRandomString(opts.digits, "0-9");
+			const hashedCode = await storeOTP(ctx, code);
 			await ctx.context.internalAdapter.createVerificationValue({
-				value: `${code}!0`,
+				value: `${hashedCode}:0`,
 				identifier: `2fa-otp-${key}`,
 				expiresAt: new Date(Date.now() + opts.period),
 			});
-			await options.sendOTP(
+			const sendOTPResult = options.sendOTP(
 				{ user: session.user as UserWithTwoFactor, otp: code },
-				ctx.request,
+				ctx,
 			);
+			if (sendOTPResult instanceof Promise) {
+				await ctx.context.runInBackgroundOrAwait(
+					sendOTPResult.catch((e: unknown) => {
+						ctx.context.logger.error("Failed to send two-factor OTP", e);
+					}),
+				);
+			}
 			return ctx.json({ status: true });
 		},
 	);
@@ -151,17 +231,7 @@ export const otp2fa = (options?: OTPOptions) => {
 		"/two-factor/verify-otp",
 		{
 			method: "POST",
-			body: z.object({
-				code: z.string({
-					description: "The otp code to verify",
-				}),
-				/**
-				 * if true, the device will be trusted
-				 * for 30 days. It'll be refreshed on
-				 * every sign in request within this time.
-				 */
-				trustDevice: z.boolean().optional(),
-			}),
+			body: verifyOTPBodySchema,
 			metadata: {
 				openapi: {
 					summary: "Verify two factor OTP",
@@ -235,48 +305,48 @@ export const otp2fa = (options?: OTPOptions) => {
 		},
 		async (ctx) => {
 			const { session, key, valid, invalid } = await verifyTwoFactor(ctx);
-			const twoFactor = await ctx.context.adapter.findOne<TwoFactorTable>({
-				model: twoFactorTable,
-				where: [
-					{
-						field: "userId",
-						value: session.user.id,
-					},
-				],
-			});
-			if (!twoFactor) {
-				throw new APIError("BAD_REQUEST", {
-					message: TWO_FACTOR_ERROR_CODES.OTP_NOT_ENABLED,
-				});
-			}
 			const toCheckOtp =
 				await ctx.context.internalAdapter.findVerificationValue(
 					`2fa-otp-${key}`,
 				);
-			const [otp, counter] = toCheckOtp?.value?.split("!") ?? [];
+			const [otp, counter] = toCheckOtp?.value?.split(":") ?? [];
 			if (!toCheckOtp || toCheckOtp.expiresAt < new Date()) {
-				await ctx.context.internalAdapter.deleteVerificationValue(
-					`2fa-otp-${key}`,
+				if (toCheckOtp) {
+					await ctx.context.internalAdapter.deleteVerificationByIdentifier(
+						`2fa-otp-${key}`,
+					);
+				}
+				throw APIError.from(
+					"BAD_REQUEST",
+					TWO_FACTOR_ERROR_CODES.OTP_HAS_EXPIRED,
 				);
-				throw new APIError("BAD_REQUEST", {
-					message: TWO_FACTOR_ERROR_CODES.OTP_HAS_EXPIRED,
-				});
 			}
 			const allowedAttempts = options?.allowedAttempts || 5;
-			if (parseInt(counter) >= allowedAttempts) {
-				await ctx.context.internalAdapter.deleteVerificationValue(
+			if (parseInt(counter!) >= allowedAttempts) {
+				await ctx.context.internalAdapter.deleteVerificationByIdentifier(
 					`2fa-otp-${key}`,
 				);
-				throw new APIError("BAD_REQUEST", {
-					message: TWO_FACTOR_ERROR_CODES.TOO_MANY_ATTEMPTS_REQUEST_NEW_CODE,
-				});
+				throw APIError.from(
+					"BAD_REQUEST",
+					TWO_FACTOR_ERROR_CODES.TOO_MANY_ATTEMPTS_REQUEST_NEW_CODE,
+				);
 			}
-			if (otp === ctx.body.code) {
+			const [storedValue, inputValue] = await decryptOrHashForComparison(
+				ctx,
+				otp!,
+				ctx.body.code,
+			);
+			const isCodeValid = constantTimeEqual(
+				new TextEncoder().encode(storedValue),
+				new TextEncoder().encode(inputValue),
+			);
+			if (isCodeValid) {
 				if (!session.user.twoFactorEnabled) {
 					if (!session.session) {
-						throw new APIError("BAD_REQUEST", {
-							message: BASE_ERROR_CODES.FAILED_TO_CREATE_SESSION,
-						});
+						throw APIError.from(
+							"BAD_REQUEST",
+							BASE_ERROR_CODES.FAILED_TO_CREATE_SESSION,
+						);
 					}
 					const updatedUser = await ctx.context.internalAdapter.updateUser(
 						session.user.id,
@@ -286,7 +356,6 @@ export const otp2fa = (options?: OTPOptions) => {
 					);
 					const newSession = await ctx.context.internalAdapter.createSession(
 						session.user.id,
-						ctx.headers,
 						false,
 						session.session,
 					);
@@ -299,23 +368,15 @@ export const otp2fa = (options?: OTPOptions) => {
 					});
 					return ctx.json({
 						token: newSession.token,
-						user: {
-							id: updatedUser.id,
-							email: updatedUser.email,
-							emailVerified: updatedUser.emailVerified,
-							name: updatedUser.name,
-							image: updatedUser.image,
-							createdAt: updatedUser.createdAt,
-							updatedAt: updatedUser.updatedAt,
-						},
+						user: parseUserOutput(ctx.context.options, updatedUser),
 					});
 				}
 				return valid(ctx);
 			} else {
-				await ctx.context.internalAdapter.updateVerificationValue(
-					toCheckOtp.id,
+				await ctx.context.internalAdapter.updateVerificationByIdentifier(
+					`2fa-otp-${key}`,
 					{
-						value: `${otp}!${parseInt(counter) + 1}`,
+						value: `${otp}:${(parseInt(counter!, 10) || 0) + 1}`,
 					},
 				);
 				return invalid("INVALID_CODE");
@@ -326,7 +387,37 @@ export const otp2fa = (options?: OTPOptions) => {
 	return {
 		id: "otp",
 		endpoints: {
+			/**
+			 * ### Endpoint
+			 *
+			 * POST `/two-factor/send-otp`
+			 *
+			 * ### API Methods
+			 *
+			 * **server:**
+			 * `auth.api.send2FaOTP`
+			 *
+			 * **client:**
+			 * `authClient.twoFactor.sendOtp`
+			 *
+			 * @see [Read our docs to learn more.](https://better-auth.com/docs/plugins/2fa#api-method-two-factor-send-otp)
+			 */
 			sendTwoFactorOTP: send2FaOTP,
+			/**
+			 * ### Endpoint
+			 *
+			 * POST `/two-factor/verify-otp`
+			 *
+			 * ### API Methods
+			 *
+			 * **server:**
+			 * `auth.api.verifyOTP`
+			 *
+			 * **client:**
+			 * `authClient.twoFactor.verifyOtp`
+			 *
+			 * @see [Read our docs to learn more.](https://better-auth.com/docs/plugins/2fa#api-method-two-factor-verify-otp)
+			 */
 			verifyTwoFactorOTP: verifyOTP,
 		},
 	} satisfies TwoFactorProvider;

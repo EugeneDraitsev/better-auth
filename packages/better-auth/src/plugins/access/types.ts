@@ -1,8 +1,11 @@
-import type { LiteralString } from "../../types/helper";
-import type { AuthortizeResponse, createAccessControl } from "./access";
+import type { LiteralString } from "@better-auth/core";
+import type { AuthorizeResponse, createAccessControl } from "./access";
+
+export type ArrayElement<T> = T extends readonly (infer E)[] ? E : never;
 
 export type SubArray<T extends unknown[] | readonly unknown[] | any[]> =
-	T[number][];
+	| T[number][]
+	| ReadonlyArray<T[number]>;
 
 export type Subset<
 	K extends keyof R,
@@ -22,6 +25,9 @@ export type AccessControl<TStatements extends Statements = Statements> =
 	ReturnType<typeof createAccessControl<TStatements>>;
 
 export type Role<TStatements extends Statements = Record<string, any>> = {
-	authorize: (request: any, connector?: "OR" | "AND") => AuthortizeResponse;
+	authorize: (
+		request: any,
+		connector?: ("OR" | "AND") | undefined,
+	) => AuthorizeResponse;
 	statements: TStatements;
 };

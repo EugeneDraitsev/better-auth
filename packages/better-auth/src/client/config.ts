@@ -1,19 +1,74 @@
+import type {
+	BetterAuthClientOptions,
+	ClientAtomListener,
+} from "@better-auth/core";
 import { createFetch } from "@better-fetch/fetch";
+import { defu } from "defu";
+import type { WritableAtom } from "nanostores";
 import { getBaseURL } from "../utils/url";
-import { type WritableAtom } from "nanostores";
-import type { AtomListener, ClientOptions } from "./types";
 import { redirectPlugin } from "./fetch-plugins";
-import { getSessionAtom } from "./session-atom";
 import { parseJSON } from "./parser";
+import { getSessionAtom } from "./session-atom";
 
-export const getClientConfig = (options?: ClientOptions) => {
+const resolvePublicAuthUrl = (basePath?: string) => {
+	if (typeof process === "undefined") return undefined;
+	const path = basePath ?? "/api/auth";
+
+	if (process.env.NEXT_PUBLIC_AUTH_URL) return process.env.NEXT_PUBLIC_AUTH_URL;
+
+	if (typeof window === "undefined") {
+		if (process.env.NEXTAUTH_URL) {
+			try {
+				return process.env.NEXTAUTH_URL;
+			} catch {}
+		}
+
+		if (process.env.VERCEL_URL) {
+			try {
+				const protocol = process.env.VERCEL_URL.startsWith("http")
+					? ""
+					: "https://";
+				const url = new URL(`${protocol}${process.env.VERCEL_URL}`);
+				return `${url.origin}${path}`;
+			} catch {
+				// ignore invalid Vercel URL
+			}
+		}
+	}
+	return undefined;
+};
+
+export const getClientConfig = (
+	options?: BetterAuthClientOptions | undefined,
+	loadEnv?: boolean | undefined,
+) => {
 	/* check if the credentials property is supported. Useful for cf workers */
 	const isCredentialsSupported = "credentials" in Request.prototype;
-	const baseURL = getBaseURL(options?.baseURL, options?.basePath);
+	const baseURL =
+		getBaseURL(options?.baseURL, options?.basePath, undefined, loadEnv) ??
+		resolvePublicAuthUrl(options?.basePath) ??
+		"/api/auth";
 	const pluginsFetchPlugins =
 		options?.plugins
 			?.flatMap((plugin) => plugin.fetchPlugins)
 			.filter((pl) => pl !== undefined) || [];
+	const lifeCyclePlugin = {
+		id: "lifecycle-hooks",
+		name: "lifecycle-hooks",
+		hooks: {
+			onSuccess: options?.fetchOptions?.onSuccess,
+			onError: options?.fetchOptions?.onError,
+			onRequest: options?.fetchOptions?.onRequest,
+			onResponse: options?.fetchOptions?.onResponse,
+		},
+	};
+	const {
+		onSuccess: _onSuccess,
+		onError: _onError,
+		onRequest: _onRequest,
+		onResponse: _onResponse,
+		...restOfFetchOptions
+	} = options?.fetchOptions || {};
 	const $fetch = createFetch({
 		baseURL,
 		...(isCredentialsSupported ? { credentials: "include" } : {}),
@@ -26,47 +81,55 @@ export const getClientConfig = (options?: ClientOptions) => {
 				strict: false,
 			});
 		},
-		customFetchImpl: async (input, init) => {
-			try {
-				return await fetch(input, init);
-			} catch (error) {
-				return Response.error();
-			}
-		},
-		...options?.fetchOptions,
-		plugins: options?.disableDefaultFetchPlugins
-			? [...(options?.fetchOptions?.plugins || []), ...pluginsFetchPlugins]
-			: [
-					redirectPlugin,
-					...(options?.fetchOptions?.plugins || []),
-					...pluginsFetchPlugins,
-				],
+		customFetchImpl: fetch,
+		...restOfFetchOptions,
+		plugins: [
+			lifeCyclePlugin,
+			...(restOfFetchOptions.plugins || []),
+			...(options?.disableDefaultFetchPlugins ? [] : [redirectPlugin]),
+			...pluginsFetchPlugins,
+		],
 	});
-	const { $sessionSignal, session } = getSessionAtom($fetch);
+	const { $sessionSignal, session, broadcastSessionUpdate } = getSessionAtom(
+		$fetch,
+		options,
+	);
 	const plugins = options?.plugins || [];
 	let pluginsActions = {} as Record<string, any>;
-	let pluginsAtoms = {
+	const pluginsAtoms = {
 		$sessionSignal,
 		session,
 	} as Record<string, WritableAtom<any>>;
-	let pluginPathMethods: Record<string, "POST" | "GET"> = {
+	const pluginPathMethods: Record<string, "POST" | "GET"> = {
 		"/sign-out": "POST",
 		"/revoke-sessions": "POST",
 		"/revoke-other-sessions": "POST",
 		"/delete-user": "POST",
 	};
-	const atomListeners: AtomListener[] = [
+	const atomListeners: ClientAtomListener[] = [
 		{
 			signal: "$sessionSignal",
 			matcher(path) {
-				return (
+				const matchesCommonPaths =
 					path === "/sign-out" ||
 					path === "/update-user" ||
-					path.startsWith("/sign-in") ||
-					path.startsWith("/sign-up") ||
+					path === "/update-session" ||
+					path === "/sign-up/email" ||
+					path === "/sign-in/email" ||
 					path === "/delete-user" ||
-					path === "/verify-email"
-				);
+					path === "/verify-email" ||
+					path === "/revoke-sessions" ||
+					path === "/revoke-session" ||
+					path === "/change-email";
+
+				return matchesCommonPaths;
+			},
+			callback(path) {
+				if (path === "/sign-out") {
+					broadcastSessionUpdate("signout");
+				} else if (path === "/update-user" || path === "/update-session") {
+					broadcastSessionUpdate("updateUser");
+				}
 			},
 		},
 	];
@@ -84,26 +147,34 @@ export const getClientConfig = (options?: ClientOptions) => {
 	}
 
 	const $store = {
-		notify: (signal?: Omit<string, "$sessionSignal"> | "$sessionSignal") => {
-			pluginsAtoms[signal as keyof typeof pluginsAtoms].set(
-				!pluginsAtoms[signal as keyof typeof pluginsAtoms].get(),
+		notify: (
+			signal?: (Omit<string, "$sessionSignal"> | "$sessionSignal") | undefined,
+		) => {
+			pluginsAtoms[signal as keyof typeof pluginsAtoms]!.set(
+				!pluginsAtoms[signal as keyof typeof pluginsAtoms]!.get(),
 			);
 		},
 		listen: (
 			signal: Omit<string, "$sessionSignal"> | "$sessionSignal",
 			listener: (value: boolean, oldValue?: boolean | undefined) => void,
 		) => {
-			pluginsAtoms[signal as keyof typeof pluginsAtoms].subscribe(listener);
+			pluginsAtoms[signal as keyof typeof pluginsAtoms]!.subscribe(listener);
 		},
 		atoms: pluginsAtoms,
 	};
 
 	for (const plugin of plugins) {
 		if (plugin.getActions) {
-			Object.assign(pluginsActions, plugin.getActions?.($fetch, $store));
+			pluginsActions = defu(
+				plugin.getActions?.($fetch, $store, options) ?? {},
+				pluginsActions,
+			);
 		}
 	}
 	return {
+		get baseURL() {
+			return baseURL;
+		},
 		pluginsActions,
 		pluginsAtoms,
 		pluginPathMethods,

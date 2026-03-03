@@ -2,17 +2,15 @@ import type { Providers } from "./constants";
 
 export type Provider = (typeof Providers)[keyof typeof Providers];
 
-export type EndpointMatcherFn = (url: string) => boolean;
-
 export interface BaseCaptchaOptions {
 	secretKey: string;
-	endpoints?: Array<string | EndpointMatcherFn>;
-	siteVerifyURLOverride?: string;
+	endpoints?: string[] | undefined;
+	siteVerifyURLOverride?: string | undefined;
 }
 
 export interface GoogleRecaptchaOptions extends BaseCaptchaOptions {
 	provider: typeof Providers.GOOGLE_RECAPTCHA;
-	minScore?: number;
+	minScore?: number | undefined;
 }
 
 export interface CloudflareTurnstileOptions extends BaseCaptchaOptions {
@@ -21,10 +19,16 @@ export interface CloudflareTurnstileOptions extends BaseCaptchaOptions {
 
 export interface HCaptchaOptions extends BaseCaptchaOptions {
 	provider: typeof Providers.HCAPTCHA;
-	siteKey?: string;
+	siteKey?: string | undefined;
+}
+
+export interface CaptchaFoxOptions extends BaseCaptchaOptions {
+	provider: typeof Providers.CAPTCHAFOX;
+	siteKey?: string | undefined;
 }
 
 export type CaptchaOptions =
 	| GoogleRecaptchaOptions
 	| CloudflareTurnstileOptions
-	| HCaptchaOptions;
+	| HCaptchaOptions
+	| CaptchaFoxOptions;
